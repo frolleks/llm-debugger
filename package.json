@@ -2,7 +2,7 @@
   "name": "llm-debugger",
   "description": "",
   "version": "0.0.0",
-  "main": "dist/index.js",
+  "main": "dist/bin/index.js",
   "bin": {
     "llm-debugger": "dist/bin/index.js"
   },
@@ -19,6 +19,8 @@
     "typescript": "^5.8.2"
   },
   "dependencies": {
-    "commander": "^13.1.0"
+    "commander": "^13.1.0",
+    "dotenv": "^16.4.7",
+    "openai": "^4.86.2"
   }
 }
