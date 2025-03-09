@@ -18,7 +18,7 @@ const debugContext: DebuggerContext = {
   errorSuggestions: [],
 };
 
-export async function debuggerClient() {
+export async function debuggerClient(modelName?: string) {
   const ws = new WebSocket(await getDebuggerURL());
   let mainScriptId: any = null;
   let mainScriptUrl: any = null;
@@ -129,7 +129,8 @@ export async function debuggerClient() {
 
         const response = await handleInitialAnalysis(
           msg.result.scriptSource,
-          debugContext
+          debugContext,
+          modelName
         );
 
         const content = response;
@@ -188,7 +189,7 @@ export async function debuggerClient() {
           msg.params?.exceptionDetails?.exception?.description ||
           'Unknown error';
         console.log('Error occurred:', errorDesc);
-        await handleError(errorDesc, debugContext);
+        await handleError(errorDesc, debugContext, modelName);
       }
 
       // Handle all pause states
@@ -227,7 +228,7 @@ export async function debuggerClient() {
         } else if (reason === 'exception') {
           const errorDesc = msg.params?.data.description;
           console.log('Error occurred:', errorDesc);
-          const res = await handleError(errorDesc, debugContext);
+          const res = await handleError(errorDesc, debugContext, modelName);
           console.log('LLM suggestion: ', res);
         }
       }
@@ -236,7 +237,8 @@ export async function debuggerClient() {
       if (msg.method === 'Debugger.paused' && msg.params.reason === 'other') {
         const response = await handleBreakpointHit(
           msg.params.callFrames[0],
-          debugContext
+          debugContext,
+          modelName
         );
 
         const content = response;

@@ -35,14 +35,28 @@ pnpm build
 
 ## Usage
 
-1. Start a Node.js debugging session:
+1. Configure your model (required before first use):
+```bash
+# Add a model
+llm-debugger model:add <name> <baseURL> [options]
 
+# Example: Add OpenRouter as default model
+llm-debugger model:add openrouter https://openrouter.ai/api/v1 --default
+
+# List configured models
+llm-debugger model:list
+```
+
+2. Start a Node.js debugging session:
 ```bash
 node --inspect-brk <file.js>
 ```
 
-2. Launch the debugger:
-
+3. Launch the debugger:
 ```bash
-node dist/index.js
+# Use default model
+llm-debugger start
+
+# Or specify a model
+llm-debugger start --model <model-name>
 ```

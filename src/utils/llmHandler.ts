@@ -1,12 +1,14 @@
-import { openai } from './ai.js';
+import { createAI } from './ai.js';
 import { DebuggerContext } from '../types/debugger.js';
 
 const model = 'meta-llama/llama-3.3-70b-instruct:free';
 
 export async function handleInitialAnalysis(
   sourceCode: string,
-  debugContext: DebuggerContext
+  debugContext: DebuggerContext,
+  modelName?: string
 ) {
+  const openai = await createAI(modelName);
   const response = await openai.chat.completions.create({
     model,
     messages: [
@@ -30,8 +32,10 @@ export async function handleInitialAnalysis(
 
 export async function handleBreakpointHit(
   callFrame: any,
-  debugContext: DebuggerContext
+  debugContext: DebuggerContext,
+  modelName?: string
 ) {
+  const openai = await createAI(modelName);
   const response = await openai.chat.completions.create({
     model,
     messages: [
@@ -70,8 +74,10 @@ export async function handleBreakpointHit(
 
 export async function handleError(
   errorDesc: string,
-  debugContext: DebuggerContext
+  debugContext: DebuggerContext,
+  modelName?: string
 ) {
+  const openai = await createAI(modelName);
   const response = await openai.chat.completions.create({
     model,
     messages: [
