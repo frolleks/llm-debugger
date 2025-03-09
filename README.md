@@ -40,8 +40,8 @@ pnpm build
 # Add a model
 llm-debugger model:add <name> <baseURL> [options]
 
-# Example: Add OpenRouter as default model
-llm-debugger model:add openrouter https://openrouter.ai/api/v1 --default
+# Example: Add DeepSeek R1 as default model
+llm-debugger model:add deepseek/deepseek-r1 https://openrouter.ai/api/v1 --default
 
 # List configured models
 llm-debugger model:list
