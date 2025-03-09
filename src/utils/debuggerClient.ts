@@ -1,29 +1,34 @@
 import WebSocket from 'ws';
-import { openai } from './ai.js';
-import { type ChatCompletion } from 'openai/resources';
-
-const model = 'meta-llama/llama-3.3-70b-instruct:free';
+import { WS_MESSAGE_IDS } from '../constants/wsMessages.js';
+import { DebuggerContext } from '../types/debugger.js';
+import {
+  handleInitialAnalysis,
+  handleBreakpointHit,
+  handleError,
+} from './llmHandler.js';
 
 async function getDebuggerURL() {
   const res = await fetch('http://127.0.0.1:9229/json/list');
   const data: any = await res.json();
-
   return data[0].webSocketDebuggerUrl;
 }
+
+const debugContext: DebuggerContext = {
+  breakpointHits: [],
+  errorSuggestions: [],
+};
 
 export async function debuggerClient() {
   const ws = new WebSocket(await getDebuggerURL());
   let mainScriptId: any = null;
   let mainScriptUrl: any = null;
-  let fetchTimer: any = null;
-  let isAtBreakpoint = false;
   let expectedBreakpoints = 0;
   let breakpointsSet = 0;
 
   function continueExecution() {
     ws.send(
       JSON.stringify({
-        id: 100,
+        id: WS_MESSAGE_IDS.RESUME_EXECUTION,
         method: 'Debugger.resume',
       })
     );
@@ -34,16 +39,29 @@ export async function debuggerClient() {
       console.log('Connected to the Node.js inspector.');
 
       // Enable debugger and runtime with proper sequencing
-      ws.send(JSON.stringify({ id: 1, method: 'Debugger.enable' }));
-      ws.send(JSON.stringify({ id: 2, method: 'Runtime.enable' }));
       ws.send(
-        JSON.stringify({ id: 3, method: 'Runtime.runIfWaitingForDebugger' })
+        JSON.stringify({
+          id: WS_MESSAGE_IDS.DEBUGGER_ENABLE,
+          method: 'Debugger.enable',
+        })
+      );
+      ws.send(
+        JSON.stringify({
+          id: WS_MESSAGE_IDS.RUNTIME_ENABLE,
+          method: 'Runtime.enable',
+        })
+      );
+      ws.send(
+        JSON.stringify({
+          id: WS_MESSAGE_IDS.RUNTIME_RUN,
+          method: 'Runtime.runIfWaitingForDebugger',
+        })
       );
 
       // Set pause on exceptions
       ws.send(
         JSON.stringify({
-          id: 4,
+          id: WS_MESSAGE_IDS.SET_PAUSE_ON_EXCEPTIONS,
           method: 'Debugger.setPauseOnExceptions',
           params: { state: 'uncaught' },
         })
@@ -54,7 +72,6 @@ export async function debuggerClient() {
       let msg;
       try {
         msg = JSON.parse(rawData.toString());
-        console.log('Received message:', msg);
       } catch {
         console.error('Parsing error:', rawData.toString());
         return;
@@ -98,7 +115,7 @@ export async function debuggerClient() {
           // Get source and set breakpoints before continuing
           ws.send(
             JSON.stringify({
-              id: 6,
+              id: WS_MESSAGE_IDS.GET_SCRIPT_SOURCE,
               method: 'Debugger.getScriptSource',
               params: { scriptId: mainScriptId },
             })
@@ -106,27 +123,19 @@ export async function debuggerClient() {
         }
       }
 
-      // When setting breakpoints, use both URL and scriptId
-      if (msg.id === 6 && msg.result) {
+      // When setting breakpoints, first LLM interaction
+      if (msg.id === WS_MESSAGE_IDS.GET_SCRIPT_SOURCE && msg.result) {
         console.log('Got script source from:', mainScriptUrl);
 
-        const response = await openai.chat.completions.create({
-          model,
-          messages: [
-            {
-              role: 'system',
-              content: `You are a Node.js debugging assistant. Suggest breakpoints. After reading the code, you should output what breakpoints to put by using this format\n                <breakpoints>\n                // this is an array containing the line numbers you're going to put breakpoints in, for example:\n                [1,2,5,8]\n                // and it must be in order.\n                // also, output this format ONLY ONCE in your response and it must be final.\n                </breakpoints>\n\n                If the user says "please debug", then you must set the breakpoints to help them debug.\n                `,
-            },
-            {
-              role: 'user',
-              content: `Please debug my code: ${msg.result.scriptSource}`,
-            },
-          ],
-        });
+        const response = await handleInitialAnalysis(
+          msg.result.scriptSource,
+          debugContext
+        );
 
-        console.log('LLM says:', response.choices[0]?.message.content);
+        const content = response;
+        debugContext.initialAnalysis = content;
+        console.log('LLM initial analysis:', content);
 
-        const content = response.choices[0]?.message?.content || '';
         const arrayMatch = content.match(
           /<breakpoints>\s*(\[[^\]]*\])\s*<\/breakpoints>/s
         );
@@ -141,7 +150,7 @@ export async function debuggerClient() {
               const zeroBasedLine = line; // Convert to zero-based line number
               ws.send(
                 JSON.stringify({
-                  id: 10 + index,
+                  id: WS_MESSAGE_IDS.BREAKPOINT_START_ID + index,
                   method: 'Debugger.setBreakpoint',
                   params: {
                     location: {
@@ -162,7 +171,7 @@ export async function debuggerClient() {
       }
 
       // Show result for each breakpoint and track completion
-      if (msg.id >= 10 && msg.result) {
+      if (msg.id >= WS_MESSAGE_IDS.BREAKPOINT_START_ID && msg.result) {
         breakpointsSet++;
         console.log(`Breakpoint request #${msg.id} set. Result:`, msg.result);
 
@@ -179,7 +188,7 @@ export async function debuggerClient() {
           msg.params?.exceptionDetails?.exception?.description ||
           'Unknown error';
         console.log('Error occurred:', errorDesc);
-        await suggestFix(errorDesc, mainScriptUrl, ws);
+        await handleError(errorDesc, debugContext);
       }
 
       // Handle all pause states
@@ -188,7 +197,6 @@ export async function debuggerClient() {
         console.log('Debugger paused, reason:', reason);
 
         if (reason === 'other' || reason === 'breakpoint') {
-          isAtBreakpoint = true;
           const frame = msg.params.callFrames[0];
           console.log('Paused at:', {
             location: frame.location,
@@ -205,7 +213,7 @@ export async function debuggerClient() {
           if (localScope) {
             ws.send(
               JSON.stringify({
-                id: 50,
+                id: WS_MESSAGE_IDS.GET_PROPERTIES,
                 method: 'Runtime.getProperties',
                 params: {
                   objectId: localScope.object.objectId,
@@ -219,42 +227,28 @@ export async function debuggerClient() {
         } else if (reason === 'exception') {
           const errorDesc = msg.params?.data.description;
           console.log('Error occurred:', errorDesc);
-          await suggestFix(errorDesc, mainScriptUrl, ws);
+          const res = await handleError(errorDesc, debugContext);
+          console.log('LLM suggestion: ', res);
         }
       }
 
-      // Handle breakpoint hit
+      // Handle breakpoint hit - second LLM interaction
       if (msg.method === 'Debugger.paused' && msg.params.reason === 'other') {
-        isAtBreakpoint = true;
-        console.log('Breakpoint hit:', msg.params.callFrames[0]);
+        const response = await handleBreakpointHit(
+          msg.params.callFrames[0],
+          debugContext
+        );
 
-        const response = await openai.chat.completions.create({
-          model,
-          messages: [
-            {
-              role: 'system',
-              content: `You are a Node.js debugging assistant. You're currently at a breakpoint.
-                Analyze the code state and decide whether to:
-                1. Continue execution (respond with "<action>continue</action>")
-                2. Add more breakpoints (respond with <breakpoints>[lines]</breakpoints>)
-                3. Suggest fixes if you spot issues
-                Be concise in your response.`,
-            },
-            {
-              role: 'user',
-              content: `Current position: ${JSON.stringify(
-                msg.params.callFrames[0]
-              )}`,
-            },
-          ],
+        const content = response;
+        debugContext.breakpointHits.push({
+          position: msg.params.callFrames[0],
+          response: content,
         });
 
-        const content = response.choices[0]?.message?.content || '';
         console.log('LLM decision:', content);
 
         if (content.includes('<action>continue</action>')) {
           continueExecution();
-          isAtBreakpoint = false;
         }
 
         // Handle any new breakpoints...
@@ -268,7 +262,6 @@ export async function debuggerClient() {
 
       // Handle debugger resumed
       if (msg.method === 'Debugger.resumed') {
-        isAtBreakpoint = false;
         console.log('Execution resumed');
       }
     });
@@ -282,61 +275,5 @@ export async function debuggerClient() {
     });
   } catch (err) {
     console.error(err);
-  }
-}
-
-interface DebuggerMessage {
-  id: number;
-  method: string;
-  params: {
-    url?: string;
-    lineNumber: number;
-  };
-}
-
-async function suggestFix(
-  errorDesc: string,
-  scriptUrl: string | null,
-  ws: WebSocket
-): Promise<void> {
-  console.log('Asking LLM for fix suggestions...');
-  try {
-    const response: ChatCompletion = await openai.chat.completions.create({
-      model,
-      messages: [
-        {
-          role: 'system',
-          content: `You are a Node.js debugging assistant. A runtime or exception error has occurred. Provide a concise fix or suggestion. If more breakpoints are needed, output them in <breakpoints>[lineNumbers]</breakpoints>.`,
-        },
-        {
-          role: 'user',
-          content: `Error info: ${errorDesc}`,
-        },
-      ],
-    });
-
-    const content = response.choices?.[0]?.message?.content || '';
-    console.log('LLM fix suggestion:', content);
-
-    // Check for <breakpoints> block
-    const arrayMatch = content.match(
-      /<breakpoints>\s*(\[[^\]]*\])\s*<\/breakpoints>/s
-    );
-    if (arrayMatch && arrayMatch[1] && scriptUrl) {
-      const lines: number[] = JSON.parse(arrayMatch[1]);
-      lines.forEach((line: number, index: number) => {
-        const message: DebuggerMessage = {
-          id: 20 + index,
-          method: 'Debugger.setBreakpointByUrl',
-          params: {
-            url: scriptUrl,
-            lineNumber: line, // or line - 1 if needed
-          },
-        };
-        ws.send(JSON.stringify(message));
-      });
-    }
-  } catch (err) {
-    console.error('Failed to query LLM for fix:', err);
   }
 }
