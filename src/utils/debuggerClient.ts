@@ -18,12 +18,13 @@ const debugContext: DebuggerContext = {
   errorSuggestions: [],
 };
 
-export async function debuggerClient(modelName?: string) {
+export async function debuggerClient(modelName: string) {
   const ws = new WebSocket(await getDebuggerURL());
   let mainScriptId: any = null;
   let mainScriptUrl: any = null;
   let expectedBreakpoints = 0;
   let breakpointsSet = 0;
+  let accumulatedResponse = '';
 
   function continueExecution() {
     ws.send(
@@ -130,16 +131,24 @@ export async function debuggerClient(modelName?: string) {
         const response = await handleInitialAnalysis(
           msg.result.scriptSource,
           debugContext,
-          modelName
+          modelName,
+          (chunk) => {
+            process.stdout.write(chunk);
+            accumulatedResponse += chunk;
+          }
         );
 
         const content = response;
         debugContext.initialAnalysis = content;
-        console.log('LLM initial analysis:', content);
+        console.log('\nLLM initial analysis complete');
 
-        const arrayMatch = content.match(
+        // Process accumulated response for breakpoints
+        const arrayMatch = accumulatedResponse.match(
           /<breakpoints>\s*(\[[^\]]*\])\s*<\/breakpoints>/s
         );
+
+        // Reset accumulated response
+        accumulatedResponse = '';
 
         if (arrayMatch && arrayMatch[1]) {
           try {
@@ -189,7 +198,18 @@ export async function debuggerClient(modelName?: string) {
           msg.params?.exceptionDetails?.exception?.description ||
           'Unknown error';
         console.log('Error occurred:', errorDesc);
-        await handleError(errorDesc, debugContext, modelName);
+        const res = await handleError(
+          errorDesc,
+          debugContext,
+          modelName,
+          (chunk) => {
+            process.stdout.write(chunk);
+            accumulatedResponse += chunk;
+          }
+        );
+        console.log('LLM suggestion: ', res);
+
+        accumulatedResponse = '';
       }
 
       // Handle all pause states
@@ -238,7 +258,11 @@ export async function debuggerClient(modelName?: string) {
         const response = await handleBreakpointHit(
           msg.params.callFrames[0],
           debugContext,
-          modelName
+          modelName,
+          (chunk) => {
+            process.stdout.write(chunk);
+            accumulatedResponse += chunk;
+          }
         );
 
         const content = response;
@@ -247,19 +271,21 @@ export async function debuggerClient(modelName?: string) {
           response: content,
         });
 
-        console.log('LLM decision:', content);
+        console.log('\nLLM decision complete');
 
-        if (content.includes('<action>continue</action>')) {
+        if (accumulatedResponse.includes('<action>continue</action>')) {
           continueExecution();
         }
 
         // Handle any new breakpoints...
-        const arrayMatch = content.match(
+        const arrayMatch = accumulatedResponse.match(
           /<breakpoints>\s*(\[[^\]]*\])\s*<\/breakpoints>/s
         );
-        if (arrayMatch && arrayMatch[1]) {
-          // ... existing breakpoint setting code ...
-        }
+
+        // Reset accumulated response
+        accumulatedResponse = '';
+
+        // ... existing breakpoint setting code ...
       }
 
       // Handle debugger resumed

@@ -58,11 +58,12 @@ export async function loadConfig() {
 
 export async function getModel(name?: string) {
   const config = await loadConfig();
-  if (name) {
-    return config.models.find((m: { name: string }) => m.name === name);
+  if (!name) {
+    // Return default model if exists
+    const defaultModel = (Object.values(config.models) as ModelConfig[]).find(
+      (model) => model.isDefault
+    );
+    return defaultModel || null;
   }
-  return (
-    config.models.find((m: { isDefault: any }) => m.isDefault) ||
-    config.models[0]
-  );
+  return config.models[name] || null;
 }

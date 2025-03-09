@@ -1,16 +1,35 @@
-import { createAI } from './ai.js';
 import { DebuggerContext } from '../types/debugger.js';
+import { config } from 'dotenv';
+import { getModel } from '../config/models.js';
+import OpenAI from 'openai';
 
-const model = 'meta-llama/llama-3.3-70b-instruct:free';
+config();
+
+export async function createAI(modelName?: string) {
+  const modelConfig = await getModel(modelName);
+  if (!modelConfig) {
+    throw new Error('No model configuration found');
+  }
+
+  return new OpenAI({
+    baseURL: modelConfig.baseURL,
+  });
+}
 
 export async function handleInitialAnalysis(
   sourceCode: string,
   debugContext: DebuggerContext,
-  modelName?: string
+  modelName?: string,
+  onStream?: (chunk: string) => void
 ) {
+  const modelConfig = await getModel(modelName);
+  if (!modelConfig) {
+    throw new Error('No model configuration found');
+  }
   const openai = await createAI(modelName);
+
   const response = await openai.chat.completions.create({
-    model,
+    model: modelConfig.name,
     messages: [
       {
         role: 'system',
@@ -25,19 +44,32 @@ export async function handleInitialAnalysis(
         content: `Please debug my code: ${sourceCode}`,
       },
     ],
+    stream: true,
   });
 
-  return response.choices[0]?.message?.content || '';
+  let fullResponse = '';
+  for await (const chunk of response) {
+    const content = chunk.choices[0]?.delta?.content || '';
+    fullResponse += content;
+    onStream?.(content);
+  }
+  return fullResponse;
 }
 
 export async function handleBreakpointHit(
   callFrame: any,
   debugContext: DebuggerContext,
-  modelName?: string
+  modelName?: string,
+  onStream?: (chunk: string) => void
 ) {
+  const modelConfig = await getModel(modelName);
+  if (!modelConfig) {
+    throw new Error('No model configuration found');
+  }
   const openai = await createAI(modelName);
+
   const response = await openai.chat.completions.create({
-    model,
+    model: modelConfig.name,
     messages: [
       {
         role: 'system',
@@ -67,19 +99,32 @@ export async function handleBreakpointHit(
         content: `Current position: ${JSON.stringify(callFrame)}`,
       },
     ],
+    stream: true,
   });
 
-  return response.choices[0]?.message?.content || '';
+  let fullResponse = '';
+  for await (const chunk of response) {
+    const content = chunk.choices[0]?.delta?.content || '';
+    fullResponse += content;
+    onStream?.(content);
+  }
+  return fullResponse;
 }
 
 export async function handleError(
   errorDesc: string,
   debugContext: DebuggerContext,
-  modelName?: string
+  modelName?: string,
+  onStream?: (chunk: string) => void
 ) {
+  const modelConfig = await getModel(modelName);
+  if (!modelConfig) {
+    throw new Error('No model configuration found');
+  }
   const openai = await createAI(modelName);
+
   const response = await openai.chat.completions.create({
-    model,
+    model: modelConfig.name,
     messages: [
       {
         role: 'system',
@@ -106,7 +151,14 @@ export async function handleError(
         content: `New error: ${errorDesc}`,
       },
     ],
+    stream: true,
   });
 
-  return response.choices[0]?.message?.content || '';
+  let fullResponse = '';
+  for await (const chunk of response) {
+    const content = chunk.choices[0]?.delta?.content || '';
+    fullResponse += content;
+    onStream?.(content);
+  }
+  return fullResponse;
 }
