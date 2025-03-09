@@ -198,17 +198,20 @@ export async function debuggerClient(modelName: string) {
           msg.params?.exceptionDetails?.exception?.description ||
           'Unknown error';
         console.log('Error occurred:', errorDesc);
-        const res = await handleError(
-          errorDesc,
-          debugContext,
-          modelName,
-          (chunk) => {
-            process.stdout.write(chunk);
-            accumulatedResponse += chunk;
-          }
-        );
-        console.log('LLM suggestion: ', res);
+        console.log('Getting LLM suggestion...');
 
+        await handleError(errorDesc, debugContext, modelName, (chunk) => {
+          process.stdout.write(chunk);
+          accumulatedResponse += chunk;
+        });
+
+        // Store the error and suggestion in context
+        debugContext.errorSuggestions.push({
+          error: errorDesc,
+          suggestion: accumulatedResponse,
+        });
+
+        console.log('\nLLM suggestion complete');
         accumulatedResponse = '';
       }
 
@@ -248,14 +251,23 @@ export async function debuggerClient(modelName: string) {
         } else if (reason === 'exception') {
           const errorDesc = msg.params?.data.description;
           console.log('Error occurred:', errorDesc);
-          const res = await handleError(errorDesc, debugContext, modelName);
-          console.log('LLM suggestion: ', res);
+          console.log('Getting LLM suggestion...');
+
+          await handleError(errorDesc, debugContext, modelName, (chunk) => {
+            process.stdout.write(chunk);
+            accumulatedResponse += chunk;
+          });
+
+          console.log('\nLLM suggestion complete');
+          accumulatedResponse = '';
         }
       }
 
       // Handle breakpoint hit - second LLM interaction
       if (msg.method === 'Debugger.paused' && msg.params.reason === 'other') {
-        const response = await handleBreakpointHit(
+        console.log('Getting LLM decision...');
+
+        await handleBreakpointHit(
           msg.params.callFrames[0],
           debugContext,
           modelName,
@@ -265,7 +277,7 @@ export async function debuggerClient(modelName: string) {
           }
         );
 
-        const content = response;
+        const content = accumulatedResponse; // Change this to use accumulated response
         debugContext.breakpointHits.push({
           position: msg.params.callFrames[0],
           response: content,
@@ -273,19 +285,45 @@ export async function debuggerClient(modelName: string) {
 
         console.log('\nLLM decision complete');
 
-        if (accumulatedResponse.includes('<action>continue</action>')) {
+        if (content.includes('<action>continue</action>')) {
           continueExecution();
         }
 
         // Handle any new breakpoints...
-        const arrayMatch = accumulatedResponse.match(
+        const arrayMatch = content.match(
           /<breakpoints>\s*(\[[^\]]*\])\s*<\/breakpoints>/s
         );
 
+        if (arrayMatch && arrayMatch[1]) {
+          try {
+            const lines = JSON.parse(arrayMatch[1]);
+            expectedBreakpoints = lines.length;
+            breakpointsSet = 0;
+
+            lines.forEach((line: number, index: number) => {
+              ws.send(
+                JSON.stringify({
+                  id: WS_MESSAGE_IDS.BREAKPOINT_START_ID + index,
+                  method: 'Debugger.setBreakpoint',
+                  params: {
+                    location: {
+                      scriptId: mainScriptId,
+                      lineNumber: line,
+                    },
+                  },
+                })
+              );
+            });
+          } catch (error) {
+            console.error(
+              'Error parsing breakpoints from LLM response:',
+              error
+            );
+          }
+        }
+
         // Reset accumulated response
         accumulatedResponse = '';
-
-        // ... existing breakpoint setting code ...
       }
 
       // Handle debugger resumed
