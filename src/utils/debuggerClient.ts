@@ -2,6 +2,8 @@ import WebSocket from 'ws';
 import { openai } from './ai.js';
 import { type ChatCompletion } from 'openai/resources';
 
+const model = 'meta-llama/llama-3.3-70b-instruct:free';
+
 async function getDebuggerURL() {
   const res = await fetch('http://127.0.0.1:9229/json/list');
   const data: any = await res.json();
@@ -109,7 +111,7 @@ export async function debuggerClient() {
         console.log('Got script source from:', mainScriptUrl);
 
         const response = await openai.chat.completions.create({
-          model: 'meta-llama/llama-3.3-70b-instruct:free',
+          model,
           messages: [
             {
               role: 'system',
@@ -227,7 +229,7 @@ export async function debuggerClient() {
         console.log('Breakpoint hit:', msg.params.callFrames[0]);
 
         const response = await openai.chat.completions.create({
-          model: 'meta-llama/llama-3.3-70b-instruct:free',
+          model,
           messages: [
             {
               role: 'system',
@@ -300,7 +302,7 @@ async function suggestFix(
   console.log('Asking LLM for fix suggestions...');
   try {
     const response: ChatCompletion = await openai.chat.completions.create({
-      model: 'meta-llama/llama-3.3-70b-instruct:free',
+      model,
       messages: [
         {
           role: 'system',
